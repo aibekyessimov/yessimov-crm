@@ -181,7 +181,7 @@ function pSales(req, url, role) {
   const ss = an.salesStats(shop), money = role === 'admin';
   if (!ss.has) return page(req, url, role, 'Продажи', '<h1>Продажи</h1><div class="card"><p>Чеков из BILLZ пока нет.</p></div>' + syncLine(), '/sales');
   const days = Math.min(365, Number(url.searchParams.get('days')) || 7);
-  const since = new Date(Date.now() - (days - 1) * 864e5).toISOString().slice(0, 10);
+  const since = new Date(Date.parse(billz.today() + 'T00:00:00Z') - (days - 1) * 864e5).toISOString().slice(0, 10);
   const lines = ss.lines.filter((l) => l.date >= since).reverse();
   const chips = '<div class="chips">' + [[1, 'Сегодня'], [7, '7 дней'], [30, '30 дней'], [90, '90 дней'], [365, 'Год']].map(([d, t]) => '<a class="' + (d === days ? 'on' : '') + '" href="/sales?days=' + d + '">' + t + '</a>').join('') + '</div>';
   const max = Math.max(1, ...ss.weeks.map((w) => w[1]));
