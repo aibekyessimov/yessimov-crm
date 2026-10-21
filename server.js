@@ -125,7 +125,7 @@ function pStock(req, url, role) {
   list = list.filter((m) => (!q || m.name.toLowerCase().includes(q)) && (!cat || m.category === cat) && m.stock > 0).sort((a, b) => b.stock_cost - a.stock_cost);
   const form = '<form class="row" method="get"><input type="search" name="q" placeholder="Поиск модели" value="' + esc(q) + '"><select name="cat"><option value="">Все категории</option>' + cats.map((c) => '<option' + (c === cat ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><button>Найти</button></form>';
   const units = list.reduce((s, m) => s + m.stock, 0);
-  return page(req, url, role, 'Остатки', '<h1>Остатки</h1><div class="card">' + form + '<p class="note">' + list.length + ' моделей · ' + fmt(units) + ' шт. Нажмите на модель — увидите цвета и размеры.</p>' + modelsTable(list, role) + '</div>' + syncLine(), '/stock');
+  return page(req, url, role, 'Остатки', '<h1>Остатки</h1><div class="card">' + form + '<p class="note">' + list.length + ' моделей · ' + fmt(units) + ' шт. Нажмите на модель — увидите цвета и размеры. <a href="/print">Распечатать лист для ревизии</a></p>' + modelsTable(list, role) + '</div>' + syncLine(), '/stock');
 }
 
 function pDecisions(req, url, role) {
@@ -164,6 +164,28 @@ function pMoves(req, url, role) {
   if (kind === 'out') list = list.filter((m) => m.delta < 0); if (kind === 'in') list = list.filter((m) => m.delta > 0);
   const chips = '<div class="chips">' + [['all', 'Всё'], ['out', 'Ушло (продажи, списания)'], ['in', 'Пришло (приходы, возвраты)']].map(([k, t]) => '<a class="' + (k === kind ? 'on' : '') + '" href="/moves?k=' + k + '">' + t + '</a>').join('') + '</div>';
   return page(req, url, role, 'Движение', '<h1>Движение товара</h1><div class="card"><p class="note">Каждый час CRM сверяет остатки в BILLZ и записывает, что изменилось. История копится с момента подключения.</p>' + chips + (list.length ? movesTable(list, role) : '<p>Пока изменений не было.</p>') + '</div>' + syncLine(), '/moves');
+}
+
+// Лист пересчёта для ревизии: печатается на A4, галочки и графа «факт» от руки
+function pPrint(req, url, role) {
+  const { shop } = currentShop(req, url);
+  const withZero = url.searchParams.get('zero') === '1';
+  const list = an.models(shop).filter((m) => m.variants.some((v) => v.stock > 0 || withZero));
+  const cats = new Map();
+  for (const m of list) { if (!cats.has(m.category)) cats.set(m.category, []); cats.get(m.category).push(m); }
+  const order = [...cats.keys()].sort((a, b) => a.localeCompare(b, 'ru'));
+  let n = 0, units = 0;
+  const body = order.map((c) => {
+    const ms = cats.get(c).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    const rows = ms.map((m) => m.variants.filter((v) => v.stock > 0 || withZero)
+      .sort((a, b) => a.color.localeCompare(b.color, 'ru') || an.sizeRank(a.size) - an.sizeRank(b.size))
+      .map((v, i) => { n++; units += Math.max(0, v.stock); return '<tr' + (i === 0 ? ' class="first"' : '') + '><td class="box">☐</td><td>' + (i === 0 ? '<b>' + esc(m.name) + '</b>' : '') + '</td><td>' + esc(v.color) + '</td><td>' + esc(v.size) + '</td><td class="bc">…' + esc(String(v.barcode || '').slice(-5)) + '</td><td class="n">' + v.stock + '</td><td class="fact"></td></tr>'; }).join('')).join('');
+    return '<h2>' + esc(c) + '</h2><table><thead><tr><th class="box">✓</th><th>Модель</th><th>Цвет</th><th>Размер</th><th>Штрихкод</th><th class="n">В BILLZ</th><th class="fact">Факт</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }).join('');
+  const blank = '<h2>Товар без карточки в BILLZ</h2><table><thead><tr><th>Модель</th><th>Цвет</th><th>Размер</th><th>Кол-во</th><th>Себестоимость</th><th>Цена</th></tr></thead><tbody>' + Array.from({ length: 15 }, () => '<tr class="blank"><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('') + '</tbody></table>';
+  const t = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
+  const css = 'body{font:11px/1.3 -apple-system,Arial,sans-serif;color:#000;margin:16px}h1{font-size:16px;margin:0 0 4px}h2{font-size:13px;margin:14px 0 4px;break-after:avoid}table{border-collapse:collapse;width:100%;margin-bottom:6px;table-layout:fixed}th,td{border:1px solid #999;padding:3px 5px;text-align:left}th{background:#eee}td.n,th.n{text-align:right}.box{width:22px;text-align:center;font-size:14px}.fact{width:60px}.bc{color:#555;width:70px}th:nth-child(2){width:30%}th:nth-child(3){width:20%}th:nth-child(4){width:60px}th:nth-child(6){width:55px}tr.first td{border-top:2px solid #000}tr.blank td{height:22px}tr{break-inside:avoid}.top{display:flex;justify-content:space-between;align-items:center}.noprint a,.noprint button{font:inherit;margin-left:8px}@media print{.noprint{display:none}body{margin:8mm}}';
+  return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Ревизия ' + esc(shop) + '</title><style>' + css + '</style></head><body><div class="top"><div><h1>Лист пересчёта — ' + esc(shop) + '</h1><div>Остатки BILLZ на ' + esc(t) + ' · ' + n + ' позиций · ' + fmt(units) + ' шт · Считал: ____________</div></div><div class="noprint"><button onclick="print()">Печать</button><a href="/print' + (withZero ? '' : '?zero=1') + '">' + (withZero ? 'Без нулевых' : 'С нулевыми остатками') + '</a><a href="/">← в CRM</a></div></div>' + body + blank + '</body></html>';
 }
 
 function pArrivals(req, url, role) {
@@ -323,6 +345,7 @@ async function handle(req, res) {
       case '/model': return send(pModel(req, url, role));
       case '/moves': return send(pMoves(req, url, role));
       case '/arrivals': return send(pArrivals(req, url, role));
+      case '/print': return send(pPrint(req, url, role));
     }
     if (!admin) return send(page(req, url, role, 'Нет доступа', '<h1>Нет доступа</h1>'), 403);
     if (url.pathname === '/settings' && req.method === 'POST') {
