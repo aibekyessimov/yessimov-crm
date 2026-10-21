@@ -162,7 +162,10 @@ function pArrivals(req, url, role) {
   const byDay = new Map();
   for (const m of list) { const k = m.date; const o = byDay.get(k) || { date: k, units: 0, cost: 0, models: new Set() }; o.units += m.delta; o.cost += m.delta * m.cost; o.models.add(m.name); byDay.set(k, o); }
   const days = [...byDay.values()];
-  return page(req, url, role, 'Приходы', '<h1>Приходы</h1><div class="card"><p class="note">Всё, что добавилось в остатки BILLZ: приходы и возвраты.</p>' + (days.length ? '<div class="tw"><table><thead><tr><th>Дата</th><th class="n">Штук</th>' + (role === 'admin' ? '<th class="n">Себестоимость, ₸</th>' : '') + '<th>Модели</th></tr></thead><tbody>' + days.map((d) => '<tr><td>' + esc(d.date) + '</td><td class="n">' + fmt(d.units) + '</td>' + (role === 'admin' ? '<td class="n">' + fmt(d.cost) + '</td>' : '') + '<td>' + esc([...d.models].join(', ')) + '</td></tr>').join('') + '</tbody></table></div>' : '<p>Приходов с момента подключения пока не было.</p>') + '</div>' + '<div class="card"><h2>Детально</h2>' + (list.length ? movesTable(list, role) : '<p class="note">—</p>') + '</div>', '/arrivals');
+  const imps = store.read('imports.json', []).filter((i) => i.shop === shop).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const impHtml = imps.length ? '<div class="card"><h2>Приходы в BILLZ</h2><div class="tw"><table><thead><tr><th>Дата</th><th>Название</th><th class="n">Пришло, шт</th><th class="n">Уже продано, шт</th><th class="n">Продано, %</th>' + (role === 'admin' ? '<th class="n">Себестоимость, ₸</th><th class="n">Розница, ₸</th>' : '') + '</tr></thead><tbody>' +
+    imps.map((i) => '<tr><td>' + esc(i.date) + '</td><td>' + esc(i.name) + '</td><td class="n">' + fmt(i.units) + '</td><td class="n">' + fmt(i.sold) + '</td><td class="n">' + (i.units ? pct(i.sold / i.units) : '—') + '</td>' + (role === 'admin' ? '<td class="n">' + fmt(i.cost) + '</td><td class="n">' + fmt(i.retail) + '</td>' : '') + '</tr>').join('') + '</tbody></table></div></div>' : '';
+  return page(req, url, role, 'Приходы', '<h1>Приходы</h1>' + impHtml + '<div class="card"><h2>Изменения остатков</h2><p class="note">Всё, что добавилось в остатки с момента подключения CRM: приходы и возвраты.</p>' + (days.length ? '<div class="tw"><table><thead><tr><th>Дата</th><th class="n">Штук</th>' + (role === 'admin' ? '<th class="n">Себестоимость, ₸</th>' : '') + '<th>Модели</th></tr></thead><tbody>' + days.map((d) => '<tr><td>' + esc(d.date) + '</td><td class="n">' + fmt(d.units) + '</td>' + (role === 'admin' ? '<td class="n">' + fmt(d.cost) + '</td>' : '') + '<td>' + esc([...d.models].join(', ')) + '</td></tr>').join('') + '</tbody></table></div>' : '<p>Приходов с момента подключения пока не было.</p>') + '</div>' + '<div class="card"><h2>Детально</h2>' + (list.length ? movesTable(list, role) : '<p class="note">—</p>') + '</div>', '/arrivals');
 }
 
 function pSettings(req, url, role, msg) {
@@ -179,7 +182,7 @@ function pSettings(req, url, role, msg) {
 
 async function pExplorer(req, url, role) {
   const path = url.searchParams.get('path') || '/v2/products';
-  const qs = url.searchParams.get('q') || 'limit=2';
+  const qs = url.searchParams.has('q') ? url.searchParams.get('q') : 'limit=2';
   let out = '';
   if (url.searchParams.has('path')) {
     try { const r = await billz.request(path, Object.fromEntries(new URLSearchParams(qs))); out = '<p class="note">' + esc(r.url) + ' → ' + r.status + '</p><pre>' + esc(JSON.stringify(r.body, null, 2).slice(0, 60000)) + '</pre>'; }
@@ -256,6 +259,13 @@ async function handle(req, res) {
     if (url.pathname === '/tg/approve' && req.method === 'POST') { const b = await readBody(req); const s = store.settings(); const chats = (s.tg_chats || []).map((c) => String(c.id) === b.id ? { ...c, approved: true } : c); store.saveSettings({ tg_chats: chats }); const c = chats.find((x) => String(x.id) === b.id); if (c) tg.send(c.id, 'Готово! Вы подключены к YESSIMOV CRM. Сводка — каждый вечер в 21:00, команда /otchet — в любой момент.'); return redirect(res, '/settings'); }
     if (url.pathname === '/tg/test' && req.method === 'POST') { const n = await tg.broadcast(reportText()); return send(pSettings(req, url, role, 'Сводка отправлена в ' + n + ' чат(а).')); }
     if (url.pathname === '/explorer') return send(await pExplorer(req, url, role));
+    if (url.pathname === '/probe') {
+      const paths = (url.searchParams.get('paths') || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 40);
+      const qs = Object.fromEntries(new URLSearchParams(url.searchParams.get('q') || 'limit=1'));
+      const rows = [];
+      for (const p of paths) { try { const r = await billz.request(p, qs); rows.push('<tr><td>' + esc(p) + '</td><td>' + r.status + '</td><td><pre>' + esc(JSON.stringify(r.body).slice(0, 600)) + '</pre></td></tr>'); } catch (e) { rows.push('<tr><td>' + esc(p) + '</td><td>err</td><td>' + esc(e.message) + '</td></tr>'); } }
+      return send(page(req, url, role, 'Probe', '<h1>Probe</h1><table>' + rows.join('') + '</table>', '/settings'));
+    }
     if (url.pathname === '/raw') { const f = url.searchParams.get('f') || ''; if (!/^[\w.-]+\.json$/.test(f)) return send('bad', 400); return send(page(req, url, role, f, '<h1>' + esc(f) + '</h1><pre>' + esc(JSON.stringify(store.read('raw/' + f, null), null, 2).slice(0, 80000)) + '</pre>', '/settings')); }
     return send(page(req, url, role, 'Не найдено', '<h1>Страница не найдена</h1>'), 404);
   } catch (e) {
