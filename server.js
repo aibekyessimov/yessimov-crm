@@ -71,7 +71,7 @@ form.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10
 function page(req, url, role, title, body, active) {
   const { shop, shops } = currentShop(req, url);
   const links = [['/', 'Сводка'], ['/sales', 'Продажи'], ['/stock', 'Остатки'], ['/decisions', 'Решения'], ['/moves', 'Движение'], ['/arrivals', 'Приходы']];
-  if (role === 'admin') links.push(['/settings', 'Настройки']);
+  if (role === 'admin') links.push(['/finance', 'Финансы'], ['/settings', 'Настройки']);
   const shopSel = shops.length > 1 ? '<form method="get" action="' + esc(url.pathname) + '"><select name="shop" onchange="document.cookie=\'shop=\'+encodeURIComponent(this.value)+\';path=/;max-age=31536000\';this.form.submit()">' + shops.map((s) => '<option' + (s === shop ? ' selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></form>' : '';
   return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + ' · YESSIMOV CRM</title><style>' + CSS + '</style></head><body><header><div class="top"><div class="logo">YESSIMOV<i>CRM</i></div><nav>' +
     links.map(([h, t]) => '<a href="' + h + '"' + (active === h ? ' class="on"' : '') + '>' + t + '</a>').join('') + '</nav>' + shopSel + '<a class="note" href="/logout">Выйти</a></div></header><main>' + body + '</main></body></html>';
@@ -182,15 +182,52 @@ function pSales(req, url, role) {
   if (!ss.has) return page(req, url, role, 'Продажи', '<h1>Продажи</h1><div class="card"><p>Чеков из BILLZ пока нет.</p></div>' + syncLine(), '/sales');
   const days = Math.min(365, Number(url.searchParams.get('days')) || 7);
   const since = new Date(Date.parse(billz.today() + 'T00:00:00Z') - (days - 1) * 864e5).toISOString().slice(0, 10);
-  const lines = ss.lines.filter((l) => l.date >= since).reverse();
+  const lines = [...ss.lines, ...ss.self_lines].filter((l) => l.date >= since).sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const chips = '<div class="chips">' + [[1, 'Сегодня'], [7, '7 дней'], [30, '30 дней'], [90, '90 дней'], [365, 'Год']].map(([d, t]) => '<a class="' + (d === days ? 'on' : '') + '" href="/sales?days=' + d + '">' + t + '</a>').join('') + '</div>';
   const max = Math.max(1, ...ss.weeks.map((w) => w[1]));
   const chart = money ? '<div class="card"><h2>Выручка по неделям</h2><div style="display:flex;align-items:flex-end;gap:3px;height:140px;overflow-x:auto">' + ss.weeks.slice(-30).map(([w, v]) => '<div title="' + esc(w) + ': ' + fmt(v) + ' ₸" style="flex:1;min-width:10px;background:var(--fg);opacity:.85;border-radius:4px 4px 0 0;height:' + Math.max(2, Math.round(v / max * 130)) + 'px"></div>').join('') + '</div><p class="note">Последние ' + Math.min(30, ss.weeks.length) + ' недель, наведите на столбец, чтобы увидеть сумму.</p></div>' : '';
   const sellers = money ? '<div class="card"><h2>Продавцы, 30 дней</h2><table><thead><tr><th>Продавец</th><th class="n">Штук</th><th class="n">Выручка, ₸</th><th class="n">Скидки, ₸</th></tr></thead><tbody>' + ss.sellers.map((x) => '<tr><td>' + esc(x.seller) + '</td><td class="n">' + fmt(x.units) + '</td><td class="n">' + fmt(x.revenue) + '</td><td class="n">' + fmt(x.discount) + '</td></tr>').join('') + '</tbody></table></div>' : '';
   const table = '<div class="tw"><table><thead><tr><th>Когда</th><th>Чек</th><th>Товар</th><th class="n">Шт</th><th class="n">Цена</th><th class="n">Скидка</th><th class="n">Сумма</th><th>Оплата</th><th>Продавец</th></tr></thead><tbody>' +
-    lines.slice(0, 2000).map((l) => '<tr><td>' + esc(String(l.at).slice(5, 16)) + '</td><td>' + esc(String(l.order).slice(-5)) + '</td><td>' + esc(l.full_name || l.name) + '</td><td class="n ' + (l.qty < 0 ? 'minus' : '') + '">' + l.qty + (l.returned ? ' (возврат ' + l.returned + ')' : '') + '</td><td class="n">' + fmt(l.price) + '</td><td class="n">' + (l.discount ? fmt(l.discount) : '') + '</td><td class="n">' + fmt(l.total) + '</td><td>' + esc(l.pay) + '</td><td>' + esc(l.seller) + '</td></tr>').join('') + '</tbody></table></div>';
-  const tot = lines.reduce((a, l) => ({ u: a.u + l.qty - (l.returned || 0), r: a.r + l.total }), { u: 0, r: 0 });
+    lines.slice(0, 2000).map((l) => '<tr><td>' + esc(String(l.at).slice(5, 16)) + '</td><td>' + esc(String(l.order).slice(-5)) + '</td><td>' + esc(l.full_name || l.name) + '</td><td class="n ' + (l.qty < 0 ? 'minus' : '') + '">' + l.qty + (l.returned ? ' (возврат ' + l.returned + ')' : '') + '</td><td class="n">' + fmt(l.price) + '</td><td class="n">' + (an.isSelf(l) ? '<span class="b info">себе</span>' : l.discount ? fmt(l.discount) : '') + '</td><td class="n">' + fmt(l.total) + '</td><td>' + esc(l.pay) + '</td><td>' + esc(l.seller) + '</td></tr>').join('') + '</tbody></table></div>';
+  const tot = lines.filter((l) => !an.isSelf(l)).reduce((a, l) => ({ u: a.u + l.qty - (l.returned || 0), r: a.r + l.total }), { u: 0, r: 0 });
   return page(req, url, role, 'Продажи', '<h1>Продажи</h1>' + chart + sellers + '<div class="card">' + chips + '<p class="note">' + fmt(tot.u) + ' шт' + (money ? ' · ' + fmt(tot.r) + ' ₸' : '') + '</p>' + table + '</div>' + syncLine(), '/sales');
+}
+
+const FIN_DEFAULT = { expenses: [{ name: 'Аренда', amount: 0 }, { name: 'Зарплата продавца (оклад)', amount: 0 }, { name: 'Коммунальные и интернет', amount: 0 }, { name: 'BILLZ и сервисы', amount: 0 }, { name: 'Реклама', amount: 0 }], seller_pct: 0, tax_pct: 0, acq_pct: 0, target_profit: 0, work_days: 30 };
+
+function pFinance(req, url, role, msg) {
+  const { shop } = currentShop(req, url);
+  const f = { ...FIN_DEFAULT, ...(store.settings().finance || {}) };
+  const ss = an.salesStats(shop);
+  const F = f.expenses.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const R = ss.d90.revenue, C = ss.d90.cost;
+  const m = R > 0 ? (R - C) / R : 0;
+  const v = (Number(f.tax_pct) + Number(f.acq_pct) + Number(f.seller_pct)) / 100;
+  const cm = m - v;
+  const be = cm > 0 ? F / cm : null, target = cm > 0 ? (F + Number(f.target_profit || 0)) / cm : null;
+  const t = billz.today(), day = Number(t.slice(8, 10)), dim = new Date(Date.UTC(Number(t.slice(0, 4)), Number(t.slice(5, 7)), 0)).getUTCDate();
+  const r = ss.mtd.revenue, c = ss.mtd.cost;
+  const grossNow = r - c - r * v, fixedNow = F * day / dim, profitNow = grossNow - fixedNow;
+  const forecast = day ? r / day * dim : 0, profitForecast = forecast * cm - F;
+  const wd = Number(f.work_days) || 30;
+  const bar = (val, goal) => goal ? '<div style="background:var(--line);border-radius:999px;height:10px;margin:6px 0"><div style="width:' + Math.min(100, Math.round(val / goal * 100)) + '%;background:' + (val >= goal ? 'var(--good)' : 'var(--fg)') + ';height:10px;border-radius:999px"></div></div>' : '';
+  const tile = (k, v, sub) => '<div class="card"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + sub + '</div></div>';
+  const rows = [...f.expenses, { name: '', amount: '' }, { name: '', amount: '' }].map((e, i) => '<tr><td><input type="text" name="en' + i + '" value="' + esc(e.name) + '" placeholder="Статья расхода" style="width:100%"></td><td><input type="text" name="ea' + i + '" value="' + esc(e.amount) + '" inputmode="numeric" style="width:120px;text-align:right"></td></tr>').join('');
+  const num = (n, v, hint) => '<label style="display:block;margin:6px 0">' + n + '<br><input type="text" name="' + v + '" value="' + esc(f[v]) + '" inputmode="decimal" style="width:120px"> <span class="note">' + hint + '</span></label>';
+  return page(req, url, role, 'Финансы', '<h1>Финансы</h1>' + (msg ? '<div class="card">' + msg + '</div>' : '') +
+    '<div class="grid">' +
+      tile('Точка безубыточности', be === null ? '—' : fmt(be) + ' ₸', be === null ? 'заполните расходы ниже' : 'в месяц · ' + fmt(be / wd) + ' ₸ в день') +
+      tile('Чтобы заработать ' + fmt(f.target_profit) + ' ₸', target === null ? '—' : fmt(target) + ' ₸', target === null ? '' : 'в месяц · ' + fmt(target / wd) + ' ₸ в день') +
+      tile('Выручка с 1-го числа', fmt(r) + ' ₸', 'прогноз на месяц ' + fmt(forecast) + ' ₸' + bar(r, be ? be * day / dim : 0)) +
+      tile('Прибыль с 1-го числа', '<span class="' + (profitNow >= 0 ? 'plus' : 'minus') + '">' + fmt(profitNow) + ' ₸</span>', 'прогноз за месяц ' + fmt(profitForecast) + ' ₸') +
+    '</div>' +
+    '<div class="card"><h2>Как считается</h2><p class="note">Маржа за 90 дней: ' + pct(m) + ' (выручка ' + fmt(R) + ' ₸, себестоимость проданного ' + fmt(C) + ' ₸). Минус налог, эквайринг и % продавца (' + pct(v) + ') = с каждых 100 ₸ выручки на покрытие расходов остаётся ' + Math.round(cm * 100) + ' ₸. Постоянные расходы ' + fmt(F) + ' ₸ в месяц.</p>' +
+      '<p class="note">Закуп товара — не расход: деньги возвращаются, когда товар продаётся, и учтены через себестоимость. Расход — то, что не возвращается: аренда, зарплата, налоги.</p>' +
+      (ss.self_month.units ? '<p>Забрал себе в этом месяце: <b>' + ss.self_month.units + ' шт</b> на ' + fmt(ss.self_month.cost) + ' ₸ по себестоимости (' + fmt(ss.self_month.retail) + ' ₸ по ценнику). В выручку и скидки не входит.</p>' : '') + '</div>' +
+    '<div class="card"><h2>Расходы в месяц</h2><form method="post" action="/finance"><table><tbody>' + rows + '</tbody></table>' +
+      num('Налог, % от выручки', 'tax_pct', 'например 3') + num('Эквайринг / Kaspi, % от выручки', 'acq_pct', 'средний по всем оплатам') + num('Процент продавца от выручки', 'seller_pct', 'если есть') +
+      num('Сколько хочу зарабатывать в месяц, ₸', 'target_profit', 'чистыми') + num('Рабочих дней в месяце', 'work_days', '') +
+      '<button>Сохранить</button></form></div>', '/finance');
 }
 
 function pSettings(req, url, role, msg) {
@@ -291,6 +328,14 @@ async function handle(req, res) {
       return redirect(res, '/settings');
     }
     if (url.pathname === '/settings') return send(pSettings(req, url, role));
+    if (url.pathname === '/finance' && req.method === 'POST') {
+      const b = await readBody(req), n = (x) => Number(String(x || '').replace(/\s/g, '').replace(',', '.')) || 0;
+      const expenses = [];
+      for (let i = 0; i < 40; i++) if (b['en' + i] !== undefined && (b['en' + i].trim() || n(b['ea' + i]))) expenses.push({ name: b['en' + i].trim() || 'Расход', amount: n(b['ea' + i]) });
+      store.saveSettings({ finance: { expenses, tax_pct: n(b.tax_pct), acq_pct: n(b.acq_pct), seller_pct: n(b.seller_pct), target_profit: n(b.target_profit), work_days: n(b.work_days) || 30 } });
+      return send(pFinance(req, url, role, 'Сохранено.'));
+    }
+    if (url.pathname === '/finance') return send(pFinance(req, url, role));
     if (url.pathname === '/sync' && req.method === 'POST') { const r = await doSync(); return send(pSettings(req, url, role, r.ok ? 'Синхронизация прошла.' : 'Синхронизация не прошла — смотрите журнал.')); }
     if (url.pathname === '/tg/approve' && req.method === 'POST') { const b = await readBody(req); const s = store.settings(); const chats = (s.tg_chats || []).map((c) => String(c.id) === b.id ? { ...c, approved: true } : c); store.saveSettings({ tg_chats: chats }); const c = chats.find((x) => String(x.id) === b.id); if (c) tg.send(c.id, 'Готово! Вы подключены к YESSIMOV CRM. Сводка — каждый вечер в 21:00, команда /otchet — в любой момент.'); return redirect(res, '/settings'); }
     if (url.pathname === '/tg/test' && req.method === 'POST') { const n = await tg.broadcast(reportText()); return send(pSettings(req, url, role, 'Сводка отправлена в ' + n + ' чат(а).')); }
