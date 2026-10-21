@@ -70,7 +70,7 @@ form.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10
 
 function page(req, url, role, title, body, active) {
   const { shop, shops } = currentShop(req, url);
-  const links = [['/', 'Сводка'], ['/stock', 'Остатки'], ['/decisions', 'Решения'], ['/moves', 'Движение'], ['/arrivals', 'Приходы']];
+  const links = [['/', 'Сводка'], ['/sales', 'Продажи'], ['/stock', 'Остатки'], ['/decisions', 'Решения'], ['/moves', 'Движение'], ['/arrivals', 'Приходы']];
   if (role === 'admin') links.push(['/settings', 'Настройки']);
   const shopSel = shops.length > 1 ? '<form method="get" action="' + esc(url.pathname) + '"><select name="shop" onchange="document.cookie=\'shop=\'+encodeURIComponent(this.value)+\';path=/;max-age=31536000\';this.form.submit()">' + shops.map((s) => '<option' + (s === shop ? ' selected' : '') + '>' + esc(s) + '</option>').join('') + '</select></form>' : '';
   return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + ' · YESSIMOV CRM</title><style>' + CSS + '</style></head><body><header><div class="top"><div class="logo">YESSIMOV<i>CRM</i></div><nav>' +
@@ -88,12 +88,20 @@ function pSummary(req, url, role) {
   const { shop } = currentShop(req, url);
   const products = store.read('products.json', []);
   if (!products.length) return page(req, url, role, 'Сводка', '<h1>Добро пожаловать</h1><div class="card"><p>Данных из BILLZ пока нет.</p>' + (role === 'admin' ? '<p><a class="btn" href="/settings">Указать ключ BILLZ</a></p>' : '<p>Попросите администратора подключить BILLZ.</p>') + '</div>' + syncLine(), '/');
-  const s = an.summary(shop), money = role === 'admin';
-  const tiles = [['Товара на полке', fmt(s.units) + ' шт', s.models + ' моделей']];
+  const s = an.summary(shop), money = role === 'admin', ss = an.salesStats(shop);
+  const tiles = [];
+  if (ss.has) {
+    tiles.push(['Продано сегодня', fmt(ss.today.units) + ' шт', (money ? fmt(ss.today.revenue) + ' ₸ · ' : '') + ss.today.checks + ' чеков']);
+    if (money) tiles.push(['Выручка за 7 дней', fmt(ss.week.revenue) + ' ₸', 'себестоимость ' + fmt(ss.week.cost) + ' ₸ — бюджет закупа']);
+    if (money) tiles.push(['Выручка за 30 дней', fmt(ss.month.revenue) + ' ₸', 'скидки ' + fmt(ss.month.discount) + ' ₸ · запас ' + (ss.month.cost ? Math.round(s.cost / (ss.month.cost / 30 * 7)) + ' нед.' : '—')]);
+  }
+  tiles.push(['Товара на полке', fmt(s.units) + ' шт', s.models + ' моделей']);
   if (money) tiles.push(['В товаре по себестоимости', fmt(s.cost) + ' ₸', 'по рознице ' + fmt(s.retail) + ' ₸']);
-  tiles.push(['Ушло сегодня', fmt(s.today_out_units) + ' шт', money ? '≈ ' + fmt(s.today_out_retail) + ' ₸ по ценнику' : '']);
+  if (!ss.has) {
+    tiles.push(['Ушло сегодня', fmt(s.today_out_units) + ' шт', money ? '≈ ' + fmt(s.today_out_retail) + ' ₸ по ценнику' : '']);
+    tiles.push(['Ушло за 7 дней', fmt(s.week_out_units) + ' шт', money ? 'себестоимость ' + fmt(s.week_out_cost) + ' ₸ — бюджет закупа' : '']);
+  }
   tiles.push(['Пришло сегодня', fmt(s.today_in_units) + ' шт', '']);
-  tiles.push(['Ушло за 7 дней', fmt(s.week_out_units) + ' шт', money ? 'себестоимость ' + fmt(s.week_out_cost) + ' ₸ — бюджет закупа' : '']);
   const dec = DEC_ORDER.filter((d) => s.decisions[d]).map((d) => '<a href="/decisions?d=' + encodeURIComponent(d) + '">' + badge(d) + ' ' + s.decisions[d] + '</a>').join(' ');
   const top = s.list.filter((m) => m.decision === 'Повтор').sort((a, b) => b.st - a.st).slice(0, 8);
   return page(req, url, role, 'Сводка', '<h1>' + esc(shop) + '</h1><div class="grid">' + tiles.map(([k, v, sub]) => '<div class="card"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + sub + '</div></div>').join('') + '</div>' +
@@ -168,6 +176,23 @@ function pArrivals(req, url, role) {
   return page(req, url, role, 'Приходы', '<h1>Приходы</h1>' + impHtml + '<div class="card"><h2>Изменения остатков</h2><p class="note">Всё, что добавилось в остатки с момента подключения CRM: приходы и возвраты.</p>' + (days.length ? '<div class="tw"><table><thead><tr><th>Дата</th><th class="n">Штук</th>' + (role === 'admin' ? '<th class="n">Себестоимость, ₸</th>' : '') + '<th>Модели</th></tr></thead><tbody>' + days.map((d) => '<tr><td>' + esc(d.date) + '</td><td class="n">' + fmt(d.units) + '</td>' + (role === 'admin' ? '<td class="n">' + fmt(d.cost) + '</td>' : '') + '<td>' + esc([...d.models].join(', ')) + '</td></tr>').join('') + '</tbody></table></div>' : '<p>Приходов с момента подключения пока не было.</p>') + '</div>' + '<div class="card"><h2>Детально</h2>' + (list.length ? movesTable(list, role) : '<p class="note">—</p>') + '</div>', '/arrivals');
 }
 
+function pSales(req, url, role) {
+  const { shop } = currentShop(req, url);
+  const ss = an.salesStats(shop), money = role === 'admin';
+  if (!ss.has) return page(req, url, role, 'Продажи', '<h1>Продажи</h1><div class="card"><p>Чеков из BILLZ пока нет.</p></div>' + syncLine(), '/sales');
+  const days = Math.min(365, Number(url.searchParams.get('days')) || 7);
+  const since = new Date(Date.now() - (days - 1) * 864e5).toISOString().slice(0, 10);
+  const lines = ss.lines.filter((l) => l.date >= since).reverse();
+  const chips = '<div class="chips">' + [[1, 'Сегодня'], [7, '7 дней'], [30, '30 дней'], [90, '90 дней'], [365, 'Год']].map(([d, t]) => '<a class="' + (d === days ? 'on' : '') + '" href="/sales?days=' + d + '">' + t + '</a>').join('') + '</div>';
+  const max = Math.max(1, ...ss.weeks.map((w) => w[1]));
+  const chart = money ? '<div class="card"><h2>Выручка по неделям</h2><div style="display:flex;align-items:flex-end;gap:3px;height:140px;overflow-x:auto">' + ss.weeks.slice(-30).map(([w, v]) => '<div title="' + esc(w) + ': ' + fmt(v) + ' ₸" style="flex:1;min-width:10px;background:var(--fg);opacity:.85;border-radius:4px 4px 0 0;height:' + Math.max(2, Math.round(v / max * 130)) + 'px"></div>').join('') + '</div><p class="note">Последние ' + Math.min(30, ss.weeks.length) + ' недель, наведите на столбец, чтобы увидеть сумму.</p></div>' : '';
+  const sellers = money ? '<div class="card"><h2>Продавцы, 30 дней</h2><table><thead><tr><th>Продавец</th><th class="n">Штук</th><th class="n">Выручка, ₸</th><th class="n">Скидки, ₸</th></tr></thead><tbody>' + ss.sellers.map((x) => '<tr><td>' + esc(x.seller) + '</td><td class="n">' + fmt(x.units) + '</td><td class="n">' + fmt(x.revenue) + '</td><td class="n">' + fmt(x.discount) + '</td></tr>').join('') + '</tbody></table></div>' : '';
+  const table = '<div class="tw"><table><thead><tr><th>Когда</th><th>Чек</th><th>Товар</th><th class="n">Шт</th><th class="n">Цена</th><th class="n">Скидка</th><th class="n">Сумма</th><th>Оплата</th><th>Продавец</th></tr></thead><tbody>' +
+    lines.slice(0, 2000).map((l) => '<tr><td>' + esc(String(l.at).slice(5, 16)) + '</td><td>' + esc(String(l.order).slice(-5)) + '</td><td>' + esc(l.full_name || l.name) + '</td><td class="n ' + (l.qty < 0 ? 'minus' : '') + '">' + l.qty + (l.returned ? ' (возврат ' + l.returned + ')' : '') + '</td><td class="n">' + fmt(l.price) + '</td><td class="n">' + (l.discount ? fmt(l.discount) : '') + '</td><td class="n">' + fmt(l.total) + '</td><td>' + esc(l.pay) + '</td><td>' + esc(l.seller) + '</td></tr>').join('') + '</tbody></table></div>';
+  const tot = lines.reduce((a, l) => ({ u: a.u + l.qty - (l.returned || 0), r: a.r + l.total }), { u: 0, r: 0 });
+  return page(req, url, role, 'Продажи', '<h1>Продажи</h1>' + chart + sellers + '<div class="card">' + chips + '<p class="note">' + fmt(tot.u) + ' шт' + (money ? ' · ' + fmt(tot.r) + ' ₸' : '') + '</p>' + table + '</div>' + syncLine(), '/sales');
+}
+
 function pSettings(req, url, role, msg) {
   const s = store.settings(), st = store.read('sync_state.json', {});
   const chats = s.tg_chats || [];
@@ -198,10 +223,18 @@ function reportText() {
   const shops = an.shopsList(products);
   const shop = shops.find((x) => /yessimov/i.test(x)) || shops[0];
   if (!shop) return 'Данных из BILLZ пока нет.';
-  const s = an.summary(shop);
+  const s = an.summary(shop), ss = an.salesStats(shop);
   const t = billz.today();
+  let lines;
+  if (ss.has) {
+    const todays = ss.lines.filter((l) => l.date === t);
+    lines = todays.slice(0, 25).map((l) => '• ' + esc(l.full_name || l.name) + ' — ' + l.qty + ' шт, ' + fmt(l.total) + ' ₸' + (l.discount ? ' (скидка ' + fmt(l.discount) + ')' : ''));
+    const rep = s.list.filter((m) => m.decision === 'Повтор').slice(0, 10).map((m) => '• ' + esc(m.name) + ' (ушло ' + pct(m.st) + ', осталось ' + m.stock + ')');
+    return '<b>' + esc(shop) + ' — ' + t + '</b>\nВыручка: ' + fmt(ss.today.revenue) + ' ₸ · ' + ss.today.units + ' шт · ' + ss.today.checks + ' чеков\nЗа 7 дней: ' + fmt(ss.week.revenue) + ' ₸\nПришло сегодня: ' + s.today_in_units + ' шт · на полке ' + fmt(s.units) + ' шт\n' +
+      (lines.length ? '\n<b>Что продали</b>\n' + lines.join('\n') + '\n' : '\nСегодня продаж нет.\n') + (rep.length ? '\n<b>Повторить</b>\n' + rep.join('\n') : '');
+  }
   const out = an.moves(shop, 2).filter((m) => m.date === t && m.delta < 0);
-  const lines = out.slice(0, 25).map((m) => '• ' + esc(m.name) + ' ' + esc([m.color, m.size].filter(Boolean).join(' ')) + ' — ' + (-m.delta) + ' шт');
+  lines = out.slice(0, 25).map((m) => '• ' + esc(m.name) + ' ' + esc([m.color, m.size].filter(Boolean).join(' ')) + ' — ' + (-m.delta) + ' шт');
   const rep = s.list.filter((m) => m.decision === 'Повтор').slice(0, 10).map((m) => '• ' + esc(m.name) + ' (ушло ' + pct(m.st) + ', осталось ' + m.stock + ')');
   return '<b>' + esc(shop) + ' — ' + t + '</b>\nУшло сегодня: ' + s.today_out_units + ' шт (≈ ' + fmt(s.today_out_retail) + ' ₸ по ценнику)\nПришло: ' + s.today_in_units + ' шт\nНа полке: ' + fmt(s.units) + ' шт\n' +
     (lines.length ? '\n<b>Что ушло</b>\n' + lines.join('\n') + '\n' : '') + (rep.length ? '\n<b>Повторить</b>\n' + rep.join('\n') : '');
@@ -215,7 +248,9 @@ function weeklyText() {
   const s = an.summary(shop);
   const grp = (d) => s.list.filter((m) => m.decision === d).slice(0, 12).map((m) => '• ' + esc(m.name) + ' — ' + m.stock + ' шт');
   const parts = [['Повторить', 'Повтор'], ['Уценить −30%', 'Уценка −30%'], ['Уценить −50%', 'Уценка −50%'], ['Распродать', 'Распродать']].map(([t, d]) => { const l = grp(d); return l.length ? '<b>' + t + '</b>\n' + l.join('\n') : ''; }).filter(Boolean);
-  return '<b>Понедельник: решения по товару</b>\nБюджет закупа на неделю ≈ ' + fmt(s.week_out_cost) + ' ₸ (себестоимость ушедшего за 7 дней)\n\n' + parts.join('\n\n');
+  const ss = an.salesStats(shop);
+  const budget = ss.has ? ss.week.cost : s.week_out_cost;
+  return '<b>Понедельник: решения по товару</b>\nБюджет закупа на неделю ≈ ' + fmt(budget) + ' ₸ (себестоимость проданного за 7 дней)\n\n' + parts.join('\n\n');
 }
 
 // ---------- маршруты ----------
@@ -240,6 +275,7 @@ async function handle(req, res) {
     switch (url.pathname) {
       case '/': return send(pSummary(req, url, role));
       case '/stock': return send(pStock(req, url, role));
+      case '/sales': return send(pSales(req, url, role));
       case '/decisions': return send(pDecisions(req, url, role));
       case '/model': return send(pModel(req, url, role));
       case '/moves': return send(pMoves(req, url, role));
