@@ -32,7 +32,7 @@ const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (c) 
 const redirect = (res, to, cookie) => { res.writeHead(303, { location: to, ...(cookie ? { 'set-cookie': cookie } : {}) }); res.end(); };
 
 const DEC_CLASS = { 'Повтор': 'good', 'Распродать': 'bad', 'Уценка −50%': 'bad', 'Уценка −30%': 'warn', 'Летнее — распродать или убрать': 'warn', 'Новинка — ждём': 'info' };
-const DEC_ORDER = ['Повтор', 'Распродать', 'Уценка −50%', 'Уценка −30%', 'Летнее — распродать или убрать', 'Новинка — ждём', 'Норма', 'Закончилась'];
+const DEC_ORDER = ['Повтор', 'Распродать', 'Уценка −50%', 'Уценка −30%', 'Летнее — распродать или убрать', 'Новинка — ждём', 'Норма', 'Нет данных — копим историю', 'Закончилась'];
 const badge = (d) => '<span class="b ' + (DEC_CLASS[d] || '') + '">' + esc(d) + '</span>';
 
 function currentShop(req, url) {
