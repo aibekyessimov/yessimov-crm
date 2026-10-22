@@ -1,6 +1,6 @@
 {
   "name": "yessimov-crm",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "CRM бутика YESSIMOV: остатки, приходы, движение и решения по товару из BILLZ",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
